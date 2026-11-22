@@ -2,9 +2,9 @@ description = "git for the lvim fuzzy tools: the state of a work tree (marks, br
 runtime     = "process"
 exec        = "./target/release/lvim-fuzzy-plugin-git"
 build       = "cargo build --release"
-hosts       = ["lvim-fuzzy-commander", "lvim-fuzzy-cli", "lvim-fuzzy-picker"]
+hosts       = ["lvim-fuzzy-commander"]
 requires    = ["git"]
-version     = "0.1.0"
+version     = "0.4.0"
 license     = "BSD-3-Clause"
 
 # EVERYTHING here is configuration. Override any key in ~/.config/lvim-plugins/lvim-fuzzy-plugin-git.toml (every tool) or in
@@ -15,3 +15,324 @@ long_timeout = 300     # seconds for the operations that talk to a server (fetch
 ignored      = true    # show ignored files in the status (dimmed); off is quicker in a tree with a big ignored folder
 untracked    = "normal" # "normal" (an untracked folder is one entry), "all" (every file in it), "no" (not shown)
 log          = 200     # how many commits `log` lists
+
+# THE KEYS. Where this plugin's buttons are in the bottom bar is the plugin's say, not the app's: the group `x`, its sub-groups and each button
+# (`call` is the function of this plugin the button runs). A button that makes no sense for what is under
+# the cursor is not shown. Move any of them in the app's config: `[plugins.lvim-fuzzy-plugin-git.keys] stage = "x a a"` (the action's name = a place:
+# group, sub-group, key), or in `~/.config/lvim-plugins/lvim-fuzzy-plugin-git.toml` under `[keys]`. A place somebody has is an error: lvc does not start.
+
+# WHAT THE PLUGIN WRITES IN THE TOOL. One function (`view`) answers for a folder: the marks column (two letters, the index and the work tree), the
+# branch and the counts in the path bar, and the facts the buttons' `when` asks about (`repo`, `staged`, `dirty`, `busy`, `upstream`, `initial`,
+# `unstaged-any` for the folder; `unstaged`, `staged`, `untracked`, `conflicted`, `tracked`, `changed`, `file`, `dir` for an entry — `item:x`: some
+# target has it, `one:x`: the only target has it, `!` turns a condition round). It is asked for a folder of this machine and — `remote = true` — of an
+# ssh server. `always`: even when the marks column is off, because the bar and the buttons live on it too.
+[columns.marks]
+title    = "git status (the index and the work tree)"
+call     = "view"
+position = "first"
+remote   = true
+always   = true
+
+[actions.stage]
+title = "add"
+call = "stage"
+when = ["repo", "item:unstaged"]
+group = "x"
+group_title = "git"
+sub = "a"
+sub_title = "files"
+button = "a"
+
+[actions.unstage]
+title = "unstage"
+call = "unstage"
+when = ["repo", "item:staged"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "u"
+
+[actions.discard]
+title = "discard"
+call = "discard"
+when = ["repo", "item:unstaged"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "d"
+
+[actions.remove]
+title = "remove"
+call = "remove"
+when = ["repo", "item:tracked"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "r"
+
+[actions.ignore]
+title = "ignore"
+call = "ignore"
+when = ["repo", "item:untracked"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "i"
+
+[actions.rename]
+title = "move"
+call = "rename"
+when = ["repo", "one:tracked"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "m"
+
+[actions.stage_all]
+title = "add all"
+call = "stage_all"
+when = ["repo", "unstaged-any"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "A"
+
+[actions.unstage_all]
+title = "unstage all"
+call = "unstage_all"
+when = ["repo", "staged"]
+group = "x"
+sub = "a"
+sub_title = "files"
+button = "U"
+
+[actions.commit]
+title = "commit"
+call = "commit"
+when = ["repo", "staged"]
+group = "x"
+sub = "c"
+sub_title = "commit"
+button = "c"
+
+[actions.amend]
+title = "amend"
+call = "amend"
+when = ["repo", "!initial"]
+group = "x"
+sub = "c"
+sub_title = "commit"
+button = "a"
+
+[actions.diff]
+title = "diff"
+call = "ui_diff"
+when = ["repo", "item:changed"]
+group = "x"
+sub = "d"
+sub_title = "inspect"
+button = "d"
+
+[actions.log]
+title = "log"
+call = "ui_log"
+when = ["repo"]
+group = "x"
+sub = "d"
+sub_title = "inspect"
+button = "l"
+
+[actions.log_all]
+title = "repo log"
+call = "ui_log_all"
+when = ["repo"]
+group = "x"
+sub = "d"
+sub_title = "inspect"
+button = "L"
+
+[actions.blame]
+title = "blame"
+call = "blame"
+when = ["repo", "one:tracked", "one:file", "!initial"]
+group = "x"
+sub = "d"
+sub_title = "inspect"
+button = "b"
+
+[actions.branches]
+title = "branches"
+call = "ui_branches"
+when = ["repo"]
+group = "x"
+sub = "b"
+sub_title = "branch"
+button = "l"
+
+[actions.new_branch]
+title = "new"
+call = "new_branch"
+when = ["repo"]
+group = "x"
+sub = "b"
+sub_title = "branch"
+button = "n"
+
+[actions.merge]
+title = "merge"
+call = "merge"
+when = ["repo", "!busy", "!initial"]
+group = "x"
+sub = "b"
+sub_title = "branch"
+button = "m"
+
+[actions.rebase]
+title = "rebase"
+call = "rebase"
+when = ["repo", "!busy", "!initial"]
+group = "x"
+sub = "b"
+sub_title = "branch"
+button = "r"
+
+[actions.fetch]
+title = "fetch"
+call = "fetch"
+when = ["repo"]
+group = "x"
+sub = "p"
+sub_title = "sync"
+button = "f"
+
+[actions.pull]
+title = "pull"
+call = "pull"
+when = ["repo", "upstream"]
+group = "x"
+sub = "p"
+sub_title = "sync"
+button = "p"
+
+[actions.push]
+title = "push"
+call = "push"
+when = ["repo"]
+group = "x"
+sub = "p"
+sub_title = "sync"
+button = "P"
+
+[actions.stash]
+title = "stash"
+call = "stash"
+when = ["repo", "dirty"]
+group = "x"
+sub = "s"
+sub_title = "stash"
+button = "s"
+
+[actions.stashes]
+title = "stashes"
+call = "ui_stashes"
+when = ["repo"]
+group = "x"
+sub = "s"
+sub_title = "stash"
+button = "l"
+
+[actions.tags]
+title = "tags"
+call = "tags"
+when = ["repo"]
+group = "x"
+sub = "t"
+sub_title = "tags"
+button = "l"
+
+[actions.new_tag]
+title = "new tag"
+call = "new_tag"
+when = ["repo"]
+group = "x"
+sub = "t"
+sub_title = "tags"
+button = "n"
+
+[actions.modules]
+title = "submodules"
+call = "modules"
+when = ["repo"]
+group = "x"
+sub = "S"
+sub_title = "modules"
+button = "l"
+
+[actions.modules_update]
+title = "update"
+call = "modules_update"
+when = ["repo"]
+group = "x"
+sub = "S"
+sub_title = "modules"
+button = "u"
+
+[actions.modules_update_all]
+title = "update all"
+call = "modules_update_all"
+when = ["repo"]
+group = "x"
+sub = "S"
+sub_title = "modules"
+button = "U"
+
+[actions.continue]
+title = "continue"
+call = "continue"
+when = ["repo", "busy"]
+group = "x"
+sub = "m"
+sub_title = "in progress"
+button = "c"
+
+[actions.abort]
+title = "abort"
+call = "abort"
+when = ["repo", "busy"]
+group = "x"
+sub = "m"
+sub_title = "in progress"
+button = "a"
+
+[actions.resolve]
+title = "resolve"
+call = "resolve"
+when = ["repo", "item:conflicted"]
+group = "x"
+sub = "m"
+sub_title = "in progress"
+button = "r"
+
+[actions.refresh]
+title = "refresh"
+call = "refresh"
+when = ["repo"]
+group = "x"
+button = "R"
+
+# THE PLUGIN'S OWN BUTTONS: these two are not the app's operations (no `builtin`): the tool calls this plugin's function and gets instructions back
+# (`text`, `menu`, `cd`, `select`, `message`). The same rules as every button: moved in the config, an error if the key is taken.
+[actions.diff_files]
+title = "diff files"
+call = "diff_files"
+group = "v"
+button = "D"
+
+[actions.changes]
+title = "changes"
+call = "changes"
+when = ["repo"]
+group = "x"
+sub = "d"
+sub_title = "inspect"
+button = "c"

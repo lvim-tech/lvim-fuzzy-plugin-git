@@ -14,6 +14,7 @@
 //! | `diff` | `dir`, `path`?, `staged`?, `untracked`? | `{"op":"text","text":"…"}` |
 //! | `show` | `dir`, `rev` | `{"op":"text","text":"…"}` |
 //! | `stashes` | `dir` | `{"op":"stashes","stashes":[{"ref","subject"}]}` |
+//! | `diff_files` · `changes` · `go` | a TOOL's button (its `[actions.*]` with `call`): the tool's context (`file`, `files`, `dir`, `other_dir`, `arg`) | instructions for the tool: `text` (the diff of two files), `menu` (what is changed; its items call `go`), `cd` + `select` |
 //! | `run` | `dir`, `verb`, `paths`?, `message`?, `name`?, `force`?, `untracked`? | `{"op":"done","text":"…"}` |
 //!
 //! `run` verbs: `stage`, `unstage`, `discard` (`paths` tracked, `untracked`), `stage_all`, `unstage_all`, `commit`, `amend`
@@ -25,9 +26,9 @@
 pub mod ops;
 pub mod runner;
 pub mod status;
+pub mod ui;
 
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -58,6 +59,8 @@ pub fn run() {
                 let inflight = inflight.clone();
                 std::thread::spawn(move || {
                     let reply = match rx.recv_timeout(limit) {
+                        // an answer is one instruction or a list of them
+                        Ok(Ok(Value::Array(list))) => json!({"id": id, "result": list}),
                         Ok(Ok(ins)) => json!({"id": id, "result": [ins]}),
                         Ok(Err(e)) => json!({"id": id, "error": e}),
                         Err(_) => json!({"id": id, "error": format!("no answer in {} s", limit.as_secs())}),
@@ -115,12 +118,104 @@ fn runner_of(ctx: &Value) -> Arc<dyn runner::Runner> {
     }
 }
 
+/// The colour of one of the two letters of a mark (`col` 0: the index, 1: the work tree).
+fn letter_colour(c: char, col: u8) -> &'static str {
+    match (c, col) {
+        (' ', _) => "",
+        ('U', _) | ('D', 1) => "red",
+        (_, 0) => "green",
+        ('M', _) => "yellow",
+        ('A', _) => "green",
+        ('R', _) => "cyan",
+        ('?', _) => "teal",
+        ('!', _) => "comment",
+        _ => "yellow",
+    }
+}
+
+/// What the tool shows of a folder: the marks column (`cells`, with `flags` per entry for the `when` of the buttons), the branch and the counts
+/// in the path bar (`bar`), and the folder as a whole (`state`: flags and the work tree's root). A folder in no work tree (or a server git cannot be
+/// read on) gets empty answers, so what was shown before is cleared — and nothing is complained about.
+fn view(ctx: &Value, run: Arc<dyn runner::Runner>) -> Value {
+    let cfg = &ctx["config"];
+    let dir = ctx["dir"].as_str().unwrap_or("");
+    let (column, remote) = (&ctx["column"], &ctx["remote"]);
+    let nothing = json!([
+        {"op": "cells", "column": column, "dir": dir, "remote": remote, "cells": {}, "flags": {}},
+        {"op": "bar", "bar": "git", "dir": dir, "remote": remote, "segments": []},
+        {"op": "state", "dir": dir, "remote": remote, "flags": []},
+    ]);
+    let ignored = cfg["ignored"].as_bool().unwrap_or(true);
+    let untracked = cfg["untracked"].as_str().unwrap_or("normal");
+    let Ok(Some(st)) = status::read_in(run, dir, ignored, untracked) else { return nothing };
+    let base = st.base(std::path::Path::new(dir)).unwrap_or_default();
+    let dirs = strings(&ctx["dirs"]);
+    let mut cells = serde_json::Map::new();
+    let mut flags = serde_json::Map::new();
+    for name in strings(&ctx["names"]) {
+        let is_dir = dirs.contains(&name);
+        let m = st.mark(&base, &name, is_dir);
+        let (a, b) = (m.map_or(' ', |m| m.x), m.map_or(' ', |m| m.y));
+        cells.insert(name.clone(), json!([[a.to_string(), letter_colour(a, 0)], [b.to_string(), letter_colour(b, 1)]]));
+        let f = ui::flags_of(&st, &base, &name, is_dir);
+        flags.insert(name, json!(f));
+    }
+    // the path bar: the branch, a merge / rebase in progress, ahead / behind, and the counts
+    let branch = match &st.branch {
+        Some(b) => b.clone(),
+        None => format!("({})", st.oid.chars().take(7).collect::<String>()),
+    };
+    let mut seg: Vec<Value> = vec![json!([format!(" \u{e0a0} {branch}"), "magenta"])];
+    if let Some(state) = &st.state {
+        seg.push(json!([format!(" {}", state.to_uppercase()), "red bold"]));
+    }
+    if st.ahead > 0 {
+        seg.push(json!([format!(" ↑{}", st.ahead), "green"]));
+    }
+    if st.behind > 0 {
+        seg.push(json!([format!(" ↓{}", st.behind), "red"]));
+    }
+    for (n, sign, colour) in [(st.staged, "+", "green"), (st.changed, "~", "yellow"), (st.untracked, "?", "teal"), (st.conflicted, "!", "red")] {
+        if n > 0 {
+            seg.push(json!([format!(" {sign}{n}"), colour]));
+        }
+    }
+    // the folder as a whole
+    let mut sf: Vec<&str> = vec!["repo"];
+    for (on, f) in [
+        (st.staged > 0, "staged"),
+        (st.changed + st.untracked + st.conflicted > 0, "unstaged-any"),
+        (st.oid == "(initial)", "initial"),
+        (st.upstream.is_some(), "upstream"),
+        (st.dirty(), "dirty"),
+        (st.state.is_some(), "busy"),
+    ] {
+        if on {
+            sf.push(f);
+        }
+    }
+    json!([
+        {"op": "cells", "column": column, "dir": dir, "remote": remote, "cells": cells, "flags": flags},
+        {"op": "bar", "bar": "git", "dir": dir, "remote": remote, "segments": seg},
+        {"op": "state", "dir": dir, "remote": remote, "flags": sf},
+    ])
+}
+
 /// The answer to one call.
 pub fn answer(ctx: &Value) -> Result<Value, String> {
     let call = ctx["call"].as_str().unwrap_or("");
+    if ["diff_files", "changes", "go"].contains(&call) {
+        return button_answer(call, ctx);
+    }
+    if let Some(a) = ui::answer(call, ctx) {
+        return a;
+    }
     let cfg = &ctx["config"];
     let dir = text(ctx, "dir")?;
     let run = runner_of(ctx);
+    if call == "view" {
+        return Ok(view(ctx, run));
+    }
     if call == "status" {
         let ignored = cfg["ignored"].as_bool().unwrap_or(true);
         let untracked = cfg["untracked"].as_str().unwrap_or("normal");
@@ -208,6 +303,64 @@ pub fn answer(ctx: &Value) -> Result<Value, String> {
     })
 }
 
+/// The answer to a call a TOOL's button makes (`diff_files`, `changes`, `go`): the context is the tool's — the file under the cursor, the marked
+/// files, the folder, the other panel's folder, `arg` — and the answer is instructions for it (`menu`, `text`, `cd`, `select`, `message`).
+fn button_answer(call: &str, ctx: &Value) -> Result<Value, String> {
+    let path = |k: &str| ctx[k].as_str().map(std::path::PathBuf::from);
+    let message = |t: &str| json!([{"op": "message", "text": t}]);
+    match call {
+        // two files: the two marked, or the one under the cursor and the file of that name in the other panel
+        "diff_files" => {
+            let files: Vec<std::path::PathBuf> = ctx["files"].as_array().map(|a| a.iter().filter_map(|f| f.as_str().map(Into::into)).collect()).unwrap_or_default();
+            let (a, b) = match files.as_slice() {
+                [a, b] => (a.clone(), b.clone()),
+                [a] => {
+                    let Some(other) = path("other_dir") else { return Ok(message("diff: mark two files, or put the other panel on a folder with the same file")) };
+                    let b = other.join(a.file_name().unwrap_or_default());
+                    if !b.is_file() {
+                        return Ok(message(&format!("diff: {} has no {} to compare with (or mark two files)", other.display(), a.file_name().unwrap_or_default().to_string_lossy())));
+                    }
+                    (a.clone(), b)
+                }
+                _ => return Ok(message("diff: mark two files, or put the cursor on one and the other panel on a folder with the same file")),
+            };
+            if !a.is_file() || !b.is_file() {
+                return Ok(message("diff: files only"));
+            }
+            let text = ops::diff_files(&a, &b)?;
+            if text.trim().is_empty() {
+                return Ok(message("the two files are the same"));
+            }
+            Ok(json!([{"op": "text", "title": format!("diff {}  {}", a.display(), b.display()), "text": text}]))
+        }
+        // what is changed or new in the work tree the folder is in: a list to pick from, Enter goes to the file
+        "changes" => {
+            let dir = path("dir").ok_or("no folder")?;
+            let Some(st) = status::read(&dir, false, "all")? else { return Ok(message("not in a git work tree")) };
+            let list = ops::changed(&st);
+            if list.is_empty() {
+                return Ok(message("nothing is changed"));
+            }
+            // the two letters in the colour of the change, then the path
+            let colour = |code: &str| {
+                if code == "??" { "teal" } else if code.contains('U') || code.contains('D') { "red" } else if code.contains('M') { "yellow" } else if code.contains('A') { "green" } else if code.contains('R') { "cyan" } else { "comment" }
+            };
+            let items: Vec<Value> = list
+                .iter()
+                .map(|(p, code)| json!({"label": format!("{code} {p}"), "call": "go", "arg": st.abs(p).to_string_lossy(), "cells": [[code, colour(code)], [p, ""]]}))
+                .collect();
+            Ok(json!([{"op": "menu", "title": format!("Changes · {}", list.len()), "items": items}]))
+        }
+        // Enter on a change: the panel goes to the folder of the file and stands on it
+        "go" => {
+            let target = ctx["arg"].as_str().map(std::path::PathBuf::from).ok_or("no path")?;
+            let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else { return Ok(message("nowhere to go")) };
+            Ok(json!([{"op": "cd", "path": parent.to_string_lossy()}, {"op": "select", "name": name.to_string_lossy()}]))
+        }
+        _ => Err(format!("no such function: {call}")),
+    }
+}
+
 /// The git plugin as the prompt of a secret: `git` and `ssh` call it (through the script of [`runner::askpass_env`]) with the question as the
 /// argument, and read the answer from stdout. Returns the exit status.
 pub fn askpass(prompt: &str) -> i32 {
@@ -221,36 +374,60 @@ pub fn askpass(prompt: &str) -> i32 {
     }
 }
 
-// ----- shipping inside the tools -----
-
-/// The arguments a tool is started with to BE this plugin: `<tool> --lvim-plugin git`.
-pub const PLUGIN_ARGS: [&str; 2] = ["--lvim-plugin", "git"];
-
-/// The plugin's `plugin.toml` as shipped.
-pub const MANIFEST: &str = include_str!("../plugin.toml");
-
-/// For a tool's `main`: if it was started to be this plugin (`--lvim-plugin git`), be it (never returns).
-pub fn run_if_asked(args: &[String]) {
-    if args.first().map(String::as_str) == Some(PLUGIN_ARGS[0]) && args.get(1).map(String::as_str) == Some(PLUGIN_ARGS[1]) {
-        // `askpass PROMPT`: asked for a secret by git or ssh
-        if args.get(2).map(String::as_str) == Some("askpass") {
-            std::process::exit(askpass(args.get(3).map(String::as_str).unwrap_or("")));
-        }
-        run();
-        std::process::exit(0);
-    }
-}
-
-/// Write the plugin's `plugin.toml` into the shared plugins directory `root`, with `exe` answering as the plugin (see
-/// `lvim_fuzzy_plugin::bundled`): a tool calls this only when its config says `[plugins.lvim-fuzzy-plugin-git] install = …`. Silent: a directory that cannot be written just means no git plugin.
-pub fn ensure_installed(root: &Path, exe: &Path) {
-    let b = lvim_fuzzy_plugin::bundled::Bundled { name: "lvim-fuzzy-plugin-git", version: env!("CARGO_PKG_VERSION"), manifest: MANIFEST };
-    let _ = lvim_fuzzy_plugin::bundled::ensure(root, &b, exe, &PLUGIN_ARGS.join(" "));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_buttons_of_the_tool_diff_two_files_list_the_changes_and_go_to_one() {
+        let d = std::env::temp_dir().join(format!("lvim-git-buttons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("one")).unwrap();
+        std::fs::create_dir_all(d.join("two")).unwrap();
+        std::fs::write(d.join("one/f.txt"), "a\nb\n").unwrap();
+        std::fs::write(d.join("two/f.txt"), "a\nc\n").unwrap();
+        std::fs::write(d.join("same.txt"), "x\n").unwrap();
+        std::fs::write(d.join("same2.txt"), "x\n").unwrap();
+        let s = |v: &Value| v.to_string();
+        // the file under the cursor and the one of that name in the other panel
+        let r = answer(&json!({"call": "diff_files", "files": [d.join("one/f.txt")], "other_dir": d.join("two"), "dir": d.join("one")})).unwrap();
+        assert_eq!(r[0]["op"], "text");
+        assert!(s(&r[0]["text"]).contains("+c") && s(&r[0]["text"]).contains("-b"), "{r}");
+        // the whole file, not only the changes: a line that is the same in both is there too
+        let many: String = (1..=40).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(d.join("one/long.txt"), &many).unwrap();
+        std::fs::write(d.join("two/long.txt"), many.replace("line 20\n", "line twenty\n")).unwrap();
+        let r = answer(&json!({"call": "diff_files", "files": [d.join("one/long.txt")], "other_dir": d.join("two"), "dir": d.join("one")})).unwrap();
+        let text = s(&r[0]["text"]);
+        assert!(text.contains("line 1\\n") && text.contains("line 40") && text.contains("twenty"), "{text}");
+        // two marked files
+        let r = answer(&json!({"call": "diff_files", "files": [d.join("same.txt"), d.join("same2.txt")], "dir": d})).unwrap();
+        assert_eq!(r[0]["op"], "message");
+        assert!(s(&r[0]["text"]).contains("same"));
+        // nothing to compare with: said, not an error
+        let r = answer(&json!({"call": "diff_files", "files": [d.join("one/f.txt")], "other_dir": d.join("nowhere"), "dir": d})).unwrap();
+        assert_eq!(r[0]["op"], "message");
+        // the changes of a work tree
+        let g = |a: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&d).args(a).output().unwrap().status.success());
+        g(&["init", "-q", "-b", "main"]);
+        g(&["config", "user.email", "t@example.org"]);
+        g(&["config", "user.name", "T"]);
+        g(&["add", "same.txt"]);
+        g(&["commit", "-q", "-m", "one"]);
+        std::fs::write(d.join("same.txt"), "changed\n").unwrap();
+        let r = answer(&json!({"call": "changes", "dir": d.join("one")})).unwrap();
+        assert_eq!(r[0]["op"], "menu");
+        let items = r[0]["items"].as_array().unwrap();
+        assert!(items.iter().any(|i| i["label"].as_str().unwrap() == " M same.txt"), "{r}");
+        assert!(items.iter().any(|i| i["label"].as_str().unwrap().starts_with("??") && i["label"].as_str().unwrap().contains("one/f.txt")), "{r}");
+        assert_eq!(items[0]["call"], "go");
+        // Enter: the folder and the name
+        let arg = items.iter().find(|i| i["label"].as_str().unwrap().contains("one/f.txt")).unwrap()["arg"].as_str().unwrap().to_string();
+        let r = answer(&json!({"call": "go", "arg": arg})).unwrap();
+        assert_eq!(r[0]["op"], "cd");
+        assert_eq!(r[1], json!({"op": "select", "name": "f.txt"}));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn calls_are_answered_as_json() {

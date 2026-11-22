@@ -1,6 +1,6 @@
 [package]
 name = "lvim-fuzzy-plugin-git"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2024"
 license = "BSD-3-Clause"
 description = "The git plugin of the lvim fuzzy tools: the state of a work tree (status marks, branch, ahead / behind) and the operations on it (stage, commit, branches, stash, log, diff, push / pull), on the git program; the tools draw"

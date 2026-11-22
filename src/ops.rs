@@ -190,6 +190,41 @@ pub fn diff(r: &Repo, path: Option<&str>, staged: bool, untracked: bool) -> Resu
     reading(r, &a)
 }
 
+/// The difference of two files, anywhere (no work tree needed): `git diff --no-index`, on the WHOLE of both files (every line is there, the
+/// changed ones marked), not only the places that differ. Empty text: they are the same.
+pub fn diff_files(a: &Path, b: &Path) -> Result<String, String> {
+    let cwd = a.parent().filter(|p| p.is_dir()).unwrap_or(Path::new("/"));
+    let o = std::process::Command::new("git")
+        .arg("-c")
+        .arg("core.quotepath=off")
+        // a context of a million lines is the whole file
+        .args(["diff", "--no-index", "--no-color", "-U1000000", "--"])
+        .arg(a)
+        .arg(b)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    // status 1 means "there is a difference": that is the answer; more than that is an error
+    if o.status.code().is_some_and(|c| c > 1) {
+        let m = String::from_utf8_lossy(&o.stderr).trim().to_string();
+        return Err(if m.is_empty() { "git diff failed".into() } else { m });
+    }
+    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// What is changed or new in the work tree, as a flat list `(path from the top, its two letters as `git status -s` has them)`, by path.
+pub fn changed(st: &crate::status::Status) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = st
+        .files
+        .iter()
+        .filter(|(_, m)| m.kind != crate::status::Kind::Ignored)
+        .map(|(p, m)| (p.clone(), if m.kind == crate::status::Kind::Untracked { "??".to_string() } else { format!("{}{}", m.x, m.y) }))
+        .collect();
+    v.sort();
+    v
+}
+
 // ----- hunks (`git add -p`) -----
 
 /// One hunk of a diff: the lines `start..end` of the diff's lines (its `@@` line first).

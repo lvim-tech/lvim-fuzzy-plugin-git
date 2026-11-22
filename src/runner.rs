@@ -3,7 +3,7 @@
 //!
 //! A command that may need a secret (a push to a server, an SSH key with a passphrase) is cut off from the terminal (`setsid`), so
 //! nothing can write into the tool's screen, and asks through `GIT_ASKPASS` / `SSH_ASKPASS`: a one-line script that calls
-//! `<tool> --lvim-plugin git askpass`, which asks with the prompt the machine has (see `lvim_fuzzy_plugin::askpass`).
+//! `lvim-fuzzy-plugin-git askpass`, which asks with the prompt the machine has (see `lvim_fuzzy_plugin::askpass`).
 
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -88,7 +88,7 @@ pub fn askpass_env() -> Vec<(String, String)> {
     let dir = cache_dir();
     let _ = std::fs::create_dir_all(&dir);
     let script = dir.join("askpass.sh");
-    let body = format!("#!/bin/sh\nexec {} --lvim-plugin git askpass \"$@\"\n", sh_quote(&exe.to_string_lossy()));
+    let body = format!("#!/bin/sh\nexec {} askpass \"$@\"\n", sh_quote(&exe.to_string_lossy()));
     if std::fs::read_to_string(&script).ok().as_deref() != Some(body.as_str()) {
         let tmp = dir.join(format!("askpass.sh.{}", std::process::id()));
         if std::fs::write(&tmp, &body).is_ok() {
