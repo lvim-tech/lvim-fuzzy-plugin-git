@@ -1,0 +1,30 @@
+[package]
+name = "lvim-fuzzy-plugin-git"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "The git plugin of the lvim fuzzy tools: the state of a work tree (status marks, branch, ahead / behind) and the operations on it (stage, commit, branches, stash, log, diff, push / pull), on the git program; the tools draw"
+repository = "https://github.com/lvim-tech/lvim-fuzzy-plugin-git"
+rust-version = "1.85"
+
+[lib]
+name = "lvim_fuzzy_plugin_git"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lvim-fuzzy-plugin-git"
+path = "src/main.rs"
+
+[dependencies]
+# the plugin host: the bundled install (the plugin ships inside lfz and lvc)
+lvim-fuzzy-plugin = { path = "../lvim-fuzzy-plugin", default-features = false }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[workspace]

@@ -1,0 +1,17 @@
+description = "git for the lvim fuzzy tools: the state of a work tree (marks, branch, ahead / behind) and the operations on it (stage, commit, branches, stash, log, diff, push / pull) — served here, drawn by the tool"
+runtime     = "process"
+exec        = "./target/release/lvim-fuzzy-plugin-git"
+build       = "cargo build --release"
+hosts       = ["lvim-fuzzy-commander", "lvim-fuzzy-cli", "lvim-fuzzy-picker"]
+requires    = ["git"]
+version     = "0.1.0"
+license     = "BSD-3-Clause"
+
+# EVERYTHING here is configuration. Override any key in ~/.config/lvim-plugins/lvim-fuzzy-plugin-git.toml (every tool) or in
+# one tool's own config under [plugins.lvim-fuzzy-plugin-git] (that tool only).
+[config]
+timeout      = 30      # seconds a reading call (status, log, diff, branches) may take before the tool is told "no answer"
+long_timeout = 300     # seconds for the operations that talk to a server (fetch, pull, push)
+ignored      = true    # show ignored files in the status (dimmed); off is quicker in a tree with a big ignored folder
+untracked    = "normal" # "normal" (an untracked folder is one entry), "all" (every file in it), "no" (not shown)
+log          = 200     # how many commits `log` lists
