@@ -156,7 +156,16 @@ fn view(ctx: &Value, run: Arc<dyn runner::Runner>) -> Value {
         let is_dir = dirs.contains(&name);
         let m = st.mark(&base, &name, is_dir);
         let (a, b) = (m.map_or(' ', |m| m.x), m.map_or(' ', |m| m.y));
-        cells.insert(name.clone(), json!([[a.to_string(), letter_colour(a, 0)], [b.to_string(), letter_colour(b, 1)]]));
+        // two cells, the letters right-aligned: both (`MM`) when the index and the work tree both have something, else the one letter in the right
+        // cell — so the marks of every entry end in the same column; the colour tells the index's (green) from the work tree's
+        let (left, right) = if a != ' ' && b != ' ' {
+            ([a.to_string(), letter_colour(a, 0).to_string()], [b.to_string(), letter_colour(b, 1).to_string()])
+        } else if b != ' ' {
+            ([" ".to_string(), String::new()], [b.to_string(), letter_colour(b, 1).to_string()])
+        } else {
+            ([" ".to_string(), String::new()], [a.to_string(), letter_colour(a, 0).to_string()])
+        };
+        cells.insert(name.clone(), json!([left, right]));
         let f = ui::flags_of(&st, &base, &name, is_dir);
         flags.insert(name, json!(f));
     }
